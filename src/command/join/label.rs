@@ -4,7 +4,7 @@ use glyph_brush_layout::{
 };
 use image::Pixel;
 
-const CANTARELL: &[u8] = include_bytes!("Cantarell-Regular.ttf");
+pub(crate) const CANTARELL: &[u8] = include_bytes!("Cantarell-Regular.ttf");
 
 #[derive(Debug, Clone)]
 pub struct Config {

@@ -36,4 +36,6 @@ Using a single capture frame `-f1` results in a still/static vcs.
 vimg vcs -c7 -n35 -H288 -f1 bbb.mkv
 ```
 
+`--no-info` leaves the grid bare. `--info-all` adds bitrate, pixel format, frame count, container and every audio track. `join` prints the same header when given `--video`.
+
 -> [bbb.wide.avif](bbb.wide.avif)

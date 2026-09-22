@@ -1,4 +1,5 @@
 mod extract;
+mod header;
 mod join;
 mod print_completions;
 mod vcs;

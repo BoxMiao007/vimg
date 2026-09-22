@@ -1,3 +1,8 @@
+# Unreleased
+* `vcs` 默认在网格上方绘制参数栏：文件名、大小、分辨率、解码器、时长。`--no-info` 关闭，`--info-all` 追加码率、像素格式、总帧数、容器和每一条音轨。
+* `join` 增加 `--video`。给出后绘制同一块参数栏；`--info-all` 必须同时给出 `--video`。
+* `--font` 与环境变量 `VIMG_FONT` 指定参数栏字体。找不到中文字体时改用英文标签，并在终端警告。
+
 # v0.2.0
 * Use svt-av1 to encode avifs instead of aom-av1, speeds up encoding.
 * By default use svt-av1 preset 6 for multi-frame avifs.

@@ -9,6 +9,8 @@ Create a new contact sheet for a video.
 
 Extracts capture frames and joins into sheet(s) then encodes into an animated, or static, vcs avif.
 
+A header above the grid lists the source video: file name, size, resolution, codecs and duration. This is on by default. `--no-info` turns it off, `--info-all` adds bitrate, pixel format, frame count, container and every audio track. `--font` (or the `VIMG_FONT` environment variable) selects the font file. Without a CJK font the labels fall back to English.
+
 ```
 vimg vcs [OPTIONS] -c <COLUMNS> -H <CAPTURE_HEIGHT> -n <NUMBER> <VIDEO>
 ```
@@ -23,7 +25,7 @@ vimg extract [OPTIONS] -n <NUMBER> <VIDEO>
 ```
 
 ### Command: join
-Join same-sized capture images into a single grid image.
+Join same-sized capture images into a single grid image. Pass `--video` to print the same header `vcs` prints; without it the grid is unchanged. `--info-all` requires `--video`.
 
 ```
 vimg join [OPTIONS] --columns <COLUMNS> --output <OUTPUT> <CAPTURE_IMAGES>...

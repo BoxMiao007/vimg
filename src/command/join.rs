@@ -1,9 +1,13 @@
 pub mod label;
 
-use anyhow::anyhow;
-use image::GenericImage;
+use crate::command::header::{self, HeaderArgs, InfoMode};
+use anyhow::{anyhow, bail};
+use image::{GenericImage, RgbaImage};
 use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 /// Join same-sized capture images into a single grid image.
 #[derive(clap::Parser, Debug, Clone)]
@@ -28,9 +32,33 @@ pub struct Join {
     #[arg(long)]
     pub label: Vec<String>,
 
+    /// Video file to read the header from. Without it, no header is drawn.
+    #[arg(long)]
+    pub video: Option<PathBuf>,
+
+    #[clap(flatten)]
+    pub header: HeaderArgs,
+
     /// Images to join.
     #[arg(required = true)]
     pub capture_images: Vec<PathBuf>,
+
+    /// Already-rendered header. Set by `vcs` so each frame does not probe again.
+    #[arg(skip)]
+    pub header_band: Option<Arc<RgbaImage>>,
+}
+
+/// Rows, then the number of columns actually used.
+pub fn grid_shape(n_captures: u32, columns: u32) -> (u32, u32) {
+    if columns == 0 || n_captures <= columns {
+        (1, n_captures.max(1))
+    } else {
+        let mut rows = n_captures / columns;
+        if !n_captures.is_multiple_of(columns) {
+            rows += 1;
+        }
+        (rows, columns)
+    }
 }
 
 impl Join {
@@ -51,16 +79,7 @@ impl Join {
             .collect::<Result<Vec<_>, _>>()?;
 
         let (cap_w, cap_h) = (images[0].width(), images[0].height());
-        let (rows, cols) = if *columns == 0 || n_captures <= *columns {
-            (1, n_captures)
-        } else {
-            let images = n_captures;
-            let mut rows = images / columns;
-            if !images.is_multiple_of(*columns) {
-                rows += 1;
-            }
-            (rows, *columns)
-        };
+        let (rows, cols) = grid_shape(n_captures, *columns);
 
         let mut labels = self.label.clone();
         labels.resize_with(images.len(), String::new);
@@ -74,9 +93,31 @@ impl Join {
             all.copy_from(&img, x as _, y as _)?;
         }
 
+        let all = self.with_header(all)?;
         image::DynamicImage::from(all).into_rgb8().save(output)?;
 
         Ok(())
+    }
+
+    fn with_header(&self, grid: RgbaImage) -> anyhow::Result<RgbaImage> {
+        if let Some(band) = &self.header_band {
+            return Ok(header::stack(band, &grid));
+        }
+        let mode = self.header.mode();
+        let Some(video) = &self.video else {
+            if mode == InfoMode::Full {
+                bail!("完整参数需要 --video");
+            }
+            return Ok(grid);
+        };
+        if mode == InfoMode::Off {
+            return Ok(grid);
+        }
+        let band = header::render(video, mode, self.header.font.as_deref(), grid.width())?;
+        if let Some(warning) = &band.warning {
+            eprintln!("{warning}");
+        }
+        Ok(header::stack(&band.image, &grid))
     }
 
     fn load_image(&self, path: impl AsRef<Path>) -> anyhow::Result<image::DynamicImage> {

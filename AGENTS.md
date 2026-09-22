@@ -12,6 +12,7 @@
 ## 行为
 
 - 默认 AVIF 编码器是 `libsvtav1`。仅 `libaom-av1` 传 `-cpu-used`，其余编码器传 `-preset`。
+- `vcs` 默认在网格上方画参数栏。`--no-info` 关闭，`--info-all` 写完整参数。字体用 `--font` 或 `VIMG_FONT`，否则按 MiSans、系统中文字体的顺序找；都没有就改用英文。`join` 只有给出 `--video` 才画。
 - `vcs` 输出扩展名必须是 `.avif`。`-f` 默认：`extract` 为 1，`vcs` 为 30。
 - 临时目录是当前目录（或 `--output-dir`）下的 `.vimg-<12 位>`。进程退出和 Ctrl-C 时删除，除非 `--keep`。不要提交。
 

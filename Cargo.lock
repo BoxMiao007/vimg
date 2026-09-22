@@ -1327,6 +1327,7 @@ dependencies = [
  "indicatif",
  "rayon",
  "shell-escape",
+ "ttf-parser",
 ]
 
 [[package]]

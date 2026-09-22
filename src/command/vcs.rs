@@ -1,5 +1,5 @@
 use crate::{
-    command::{self, label, sh_escape, sh_escape_filename},
+    command::{self, header, label, sh_escape, sh_escape_filename},
     process::CommandExt,
     temporary,
 };
@@ -59,6 +59,9 @@ pub struct Vcs {
     #[clap(flatten)]
     pub args: command::Extract,
 
+    #[clap(flatten)]
+    pub header: header::HeaderArgs,
+
     /// Keep temporary files.
     #[arg(long, default_value_t = false)]
     pub keep: bool,
@@ -110,6 +113,7 @@ impl Vcs {
         }
 
         spinner.set_message("Joining");
+        let header_band = self.header_band(&extract, &temp_dir, &spinner)?;
         let frame_w = self.args.capture_frames().to_string().len();
         let file_prefix = self.args.video.with_extension("");
         let file_prefix = file_prefix
@@ -148,6 +152,9 @@ impl Vcs {
                     capture_width: None,
                     capture_height: None,
                     label,
+                    video: None,
+                    header: command::header::HeaderArgs::default(),
+                    header_band: header_band.clone(),
                 }
                 .run()
             })?;
@@ -201,6 +208,35 @@ impl Vcs {
 
         spinner.finish();
         Ok(())
+    }
+
+    fn header_band(
+        &self,
+        extract: &command::ExtractData,
+        temp_dir: &std::path::Path,
+        spinner: &indicatif::ProgressBar,
+    ) -> anyhow::Result<Option<std::sync::Arc<image::RgbaImage>>> {
+        let mode = self.header.mode();
+        if mode == header::InfoMode::Off {
+            return Ok(None);
+        }
+        let Some(first) = extract.out_templates.first() else {
+            return Ok(None);
+        };
+        let mut path = temp_dir.to_path_buf();
+        path.push(first.with_frame(1));
+        let (cap_w, _) = image::image_dimensions(&path)?;
+        let (_, cols) = command::grid_shape(extract.out_templates.len() as u32, self.columns);
+        let band = header::render(
+            &self.args.video,
+            mode,
+            self.header.font.as_deref(),
+            cap_w * cols.max(1),
+        )?;
+        if let Some(warning) = &band.warning {
+            spinner.println(warning.clone());
+        }
+        Ok(Some(band.image))
     }
 
     fn extract_scale(&self) -> Option<String> {
