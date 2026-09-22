@@ -697,16 +697,15 @@ fn draw_band(font: &FontVec, lines: &[String], grid_width: u32) -> anyhow::Resul
         };
         let bounds = outlined.px_bounds();
         outlined.draw(|x, y, c| {
+            // BMP 不存 alpha。覆盖率若只写进 alpha，存盘时被丢掉，
+            // 包围盒里每个像素都变成纯白，字形就成了实心方块。
+            let v = (c.clamp(0.0, 1.0) * 255.0) as u8;
             let px = (bounds.min.x + x as f32).round() as i32;
             let py = (bounds.min.y + y as f32).round() as i32;
             if px < 0 || py < 0 || px as u32 >= width || py as u32 >= height {
                 return;
             }
-            img.put_pixel(
-                px as u32,
-                py as u32,
-                image::Rgba([255, 255, 255, (c * 255.0) as u8]),
-            );
+            img.put_pixel(px as u32, py as u32, image::Rgba([v, v, v, 255]));
         });
     }
     Ok(img)
@@ -942,5 +941,36 @@ mod tests {
         fs::write(dir.join("MiSans-Regular.ttf"), []).unwrap();
         let found = find_font_in(&[dir.to_path_buf()]).unwrap();
         assert!(found.path.ends_with("MiSans-Regular.ttf"));
+    }
+
+    #[test]
+    fn glyph_counters_stay_open() {
+        let font = FontVec::try_from_vec(CANTARELL.to_vec()).unwrap();
+        let img = draw_band(&font, &["0".into()], 240).unwrap();
+        let (mut min_x, mut min_y) = (img.width(), img.height());
+        let (mut max_x, mut max_y) = (0u32, 0u32);
+        let mut ink = 0u32;
+        for (x, y, px) in img.enumerate_pixels() {
+            if px.0[0] > 200 {
+                ink += 1;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+        assert!(ink > 20, "没有画出字形");
+        let mut hole = 0u32;
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                if img.get_pixel(x, y).0[0] < 32 {
+                    hole += 1;
+                }
+            }
+        }
+        assert!(
+            hole > 10,
+            "字形包围盒被涂成实心，洞里没有背景像素 (ink={ink}, hole={hole})"
+        );
     }
 }
