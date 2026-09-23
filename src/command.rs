@@ -1,6 +1,7 @@
 mod extract;
 mod header;
 mod join;
+mod layout;
 mod print_completions;
 mod vcs;
 

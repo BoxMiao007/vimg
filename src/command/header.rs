@@ -93,6 +93,16 @@ pub struct Band {
     pub warning: Option<String>,
 }
 
+/// 第一条真正的视频轨的像素宽高。封面图不算。
+pub fn frame_size(video: &Path) -> anyhow::Result<(u32, u32)> {
+    let facts = probe(video)?;
+    let picture = facts
+        .picture
+        .filter(|pic| pic.width > 0 && pic.height > 0)
+        .context("没有视频轨，无法生成接触表")?;
+    Ok((picture.width as u32, picture.height as u32))
+}
+
 pub fn render(
     video: &Path,
     mode: InfoMode,

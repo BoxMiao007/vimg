@@ -11,6 +11,8 @@ Extracts capture frames and joins into sheet(s) then encodes into an animated, o
 
 A header above the grid lists the source video: file name, size, resolution, codecs and duration. This is on by default. `--no-info` turns it off, `--info-all` adds bitrate, pixel format, frame count, container and every audio track. `--font` (or the `VIMG_FONT` environment variable) selects the font file. Without a CJK font the labels fall back to English.
 
+`--layout 1` uses a fixed 19-cell band instead of an even grid: five columns, with a 2×2 cell at the top left and another at the bottom right. `-n` is then how many bands to stack (default 1). `-c`, `-H` and `-W` are ignored. Omit `--layout` for the even grid.
+
 ```
 vimg vcs [OPTIONS] -c <COLUMNS> -H <CAPTURE_HEIGHT> -n <NUMBER> <VIDEO>
 ```

@@ -15,8 +15,10 @@ use std::{fs, path::PathBuf, process::Command, time::Duration};
 #[group(skip)]
 pub struct Vcs {
     /// Number of capture columns in output.
+    ///
+    /// Required unless `--layout 1`, which is always 5 columns.
     #[arg(long, short)]
-    pub columns: u32,
+    pub columns: Option<u32>,
 
     /// Output file name. Defaults to input with .avif extension.
     #[arg(long, short)]
@@ -52,8 +54,8 @@ pub struct Vcs {
 
     /// Pixel height of each capture inside the grid. Will be scaled preserving aspect.
     ///
-    /// Use this or -W (not both).
-    #[arg(long, short = 'H', conflicts_with = "capture_width", required = true)]
+    /// Use this or -W (not both). Required unless `--layout 1`.
+    #[arg(long, short = 'H', conflicts_with = "capture_width")]
     pub capture_height: Option<u32>,
 
     #[clap(flatten)]
@@ -65,6 +67,10 @@ pub struct Vcs {
     /// Keep temporary files.
     #[arg(long, default_value_t = false)]
     pub keep: bool,
+
+    /// Contact-sheet layout. Omit for an even grid. `1` is the fixed 19-cell band.
+    #[arg(long)]
+    pub layout: Option<u32>,
 }
 
 impl Vcs {
@@ -86,17 +92,24 @@ impl Vcs {
         self.args.output_dir = Some(temp_dir.clone());
         self.args.capture_frames = self.args.capture_frames.or(Some(30));
 
-        let ex_scale = self.extract_scale();
-        self.args.vfilter = match (self.args.vfilter, ex_scale) {
-            (Some(vf), Some(scale)) => Some(format!("{vf},{scale}")),
-            (vf, scale) => vf.or(scale),
-        };
-
         let spinner = indicatif::ProgressBar::new_spinner().with_style(
             indicatif::ProgressStyle::default_spinner()
                 .template("{spinner:.cyan.bold} {elapsed_precise:.bold} {msg}")?,
         );
         spinner.enable_steady_tick(Duration::from_millis(100));
+
+        let layout = command::layout::known(self.layout)?;
+        let layout_small_w = self.prepare_layout(layout, &spinner)?;
+        let ex_scale = if let Some(small_w) = layout_small_w {
+            let (large_w, large_h) = command::layout::large_size(small_w);
+            Some(format!("scale={large_w}:{large_h}:flags=bicubic"))
+        } else {
+            self.extract_scale()?
+        };
+        self.args.vfilter = match (self.args.vfilter, ex_scale) {
+            (Some(vf), Some(scale)) => Some(format!("{vf},{scale}")),
+            (vf, scale) => vf.or(scale),
+        };
 
         if self.keep {
             spinner.println(format!(
@@ -113,7 +126,7 @@ impl Vcs {
         }
 
         spinner.set_message("Joining");
-        let header_band = self.header_band(&extract, &temp_dir, &spinner)?;
+        let header_band = self.header_band(&extract, &temp_dir, &spinner, layout_small_w)?;
         let frame_w = self.args.capture_frames().to_string().len();
         let file_prefix = self.args.video.with_extension("");
         let file_prefix = file_prefix
@@ -142,7 +155,8 @@ impl Vcs {
                     .collect();
 
                 command::Join {
-                    columns: self.columns,
+                    columns: self.columns.filter(|_| layout.is_none()),
+                    layout: self.layout.filter(|_| layout.is_some()),
                     output: {
                         let mut o = temp_dir.to_path_buf();
                         o.push(format!("{file_prefix}-{f:0frame_w$}.bmp"));
@@ -210,11 +224,45 @@ impl Vcs {
         Ok(())
     }
 
+    /// 版式 1 把 `-n` 改成截数，并忽略列数和格子尺寸。返回小格宽。
+    fn prepare_layout(
+        &mut self,
+        layout: Option<u32>,
+        spinner: &indicatif::ProgressBar,
+    ) -> anyhow::Result<Option<u32>> {
+        let Some(1) = layout else {
+            ensure!(self.args.number.is_some(), "需要 -n");
+            ensure!(self.columns.is_some(), "需要 -c");
+            return Ok(None);
+        };
+
+        for warning in [
+            self.columns.map(|_| "警告: -c 在版式 1 不起作用。"),
+            self.capture_width.map(|_| "警告: -W 在版式 1 不起作用。"),
+            self.capture_height.map(|_| "警告: -H 在版式 1 不起作用。"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            spinner.println(warning);
+        }
+
+        let bands = self.args.number.unwrap_or(1);
+        // 截数不合法时先停，不必去读视频。
+        let captures = command::layout::captures_for_bands(bands)?;
+        let (src_w, src_h) = command::header::frame_size(&self.args.video)?;
+        let small_w = command::layout::small_width(src_w, src_h)?;
+        self.args.number = Some(captures);
+        self.args.strict_frames = true;
+        Ok(Some(small_w))
+    }
+
     fn header_band(
         &self,
         extract: &command::ExtractData,
         temp_dir: &std::path::Path,
         spinner: &indicatif::ProgressBar,
+        layout_small_w: Option<u32>,
     ) -> anyhow::Result<Option<std::sync::Arc<image::RgbaImage>>> {
         let mode = self.header.mode();
         if mode == header::InfoMode::Off {
@@ -225,25 +273,30 @@ impl Vcs {
         };
         let mut path = temp_dir.to_path_buf();
         path.push(first.with_frame(1));
-        let (cap_w, _) = image::image_dimensions(&path)?;
-        let (_, cols) = command::grid_shape(extract.out_templates.len() as u32, self.columns);
-        let band = header::render(
-            &self.args.video,
-            mode,
-            self.header.font.as_deref(),
-            cap_w * cols.max(1),
-        )?;
+        let width = if let Some(small_w) = layout_small_w {
+            command::layout::COLUMNS * small_w
+        } else {
+            let (cap_w, _) = image::image_dimensions(&path)?;
+            let (_, cols) = command::grid_shape(
+                extract.out_templates.len() as u32,
+                self.columns.unwrap_or(1),
+            );
+            cap_w * cols.max(1)
+        };
+        let band = header::render(&self.args.video, mode, self.header.font.as_deref(), width)?;
         if let Some(warning) = &band.warning {
             spinner.println(warning.clone());
         }
         Ok(Some(band.image))
     }
 
-    fn extract_scale(&self) -> Option<String> {
+    fn extract_scale(&self) -> anyhow::Result<Option<String>> {
         if let Some(h) = self.capture_height {
-            return Some(format!("scale=-1:{h}:flags=bicubic"));
+            return Ok(Some(format!("scale=-1:{h}:flags=bicubic")));
         }
-        let w = self.capture_width?;
-        Some(format!("scale={w}:-1:flags=bicubic"))
+        let Some(w) = self.capture_width else {
+            anyhow::bail!("需要 -H 或 -W");
+        };
+        Ok(Some(format!("scale={w}:-1:flags=bicubic")))
     }
 }

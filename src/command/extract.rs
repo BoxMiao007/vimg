@@ -2,7 +2,7 @@ use crate::{
     command::{DurationOrPercent, HumanDuration, sh_escape},
     process::CommandExt,
 };
-use anyhow::{Context, ensure};
+use anyhow::{Context, bail, ensure};
 use rayon::prelude::*;
 use std::{
     fmt, fs,
@@ -15,8 +15,11 @@ use std::{
 #[group(skip)]
 pub struct Extract {
     /// Number of equidistant points in the video to capture.
+    ///
+    /// Required for `extract` and for the default `vcs` layout. With
+    /// `vcs --layout 1` this is the number of 19-cell bands, and defaults to 1.
     #[arg(long, short)]
-    pub number: u32,
+    pub number: Option<u32>,
 
     /// Time or percentage at the start to ignore when calculating capture points.
     #[arg(long = "ignore-start", default_value = "0s")]
@@ -51,12 +54,16 @@ pub struct Extract {
     /// Video file input.
     #[arg(required = true)]
     pub video: PathBuf,
+
+    /// 版式 1 不补缺帧。抽到的张数不够就停。
+    #[arg(skip)]
+    pub strict_frames: bool,
 }
 
 impl Extract {
     pub fn run(&self) -> anyhow::Result<ExtractData> {
+        let number = self.number.context("需要 -n")?;
         let Self {
-            number,
             ignore_start,
             ignore_end,
             threads,
@@ -93,10 +100,10 @@ impl Extract {
             .num_threads(*threads)
             .build()?
             .install(|| {
-                let out_templates = (0..*number)
+                let out_templates = (0..number)
                     .into_par_iter()
                     .map(|n| {
-                        let interval = duration_s / *number as f32;
+                        let interval = duration_s / number as f32;
                         let start_s = ignore_start.to_secs(video_duration_s)
                             + interval * 0.5
                             + interval * n as f32;
@@ -195,6 +202,9 @@ impl Extract {
                 let mut next = temp_dir.to_path_buf();
                 next.push(tmpl.with_frame(f));
                 if !next.is_file() {
+                    if self.strict_frames {
+                        bail!("版式 1 缺帧，不出接触表: {}", sh_escape(&next));
+                    }
                     fs::hard_link(&prev, &next).or_else(|_| fs::copy(&prev, &next).map(|_| ()))?;
                     fixes += 1;
                 }

@@ -38,4 +38,12 @@ vimg vcs -c7 -n35 -H288 -f1 bbb.mkv
 
 `--no-info` leaves the grid bare. `--info-all` adds bitrate, pixel format, frame count, container and every audio track. `join` prints the same header when given `--video`.
 
+## Example: Layout 1
+
+One fixed band of 19 cells. The top-left and bottom-right cells are twice as wide and tall as the others. `-n 2` stacks a second band underneath. `-c`, `-H` and `-W` are ignored.
+
+```sh
+vimg vcs --layout 1 -n 2 bbb.mkv
+```
+
 -> [bbb.wide.avif](bbb.wide.avif)
