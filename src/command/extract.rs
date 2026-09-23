@@ -17,7 +17,7 @@ pub struct Extract {
     /// Number of equidistant points in the video to capture.
     ///
     /// Required for `extract` and for the default `vcs` layout. With
-    /// `vcs --layout 1` this is the number of 19-cell bands, and defaults to 1.
+    /// `vcs --layout 1` this is the number of 14-cell bands, and defaults to 1.
     #[arg(long, short)]
     pub number: Option<u32>,
 

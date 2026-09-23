@@ -16,7 +16,7 @@ use std::{fs, path::PathBuf, process::Command, time::Duration};
 pub struct Vcs {
     /// Number of capture columns in output.
     ///
-    /// Required unless `--layout 1`, which is always 5 columns.
+    /// Required unless `--layout 1`, which is always 4 columns.
     #[arg(long, short)]
     pub columns: Option<u32>,
 
@@ -68,7 +68,7 @@ pub struct Vcs {
     #[arg(long, default_value_t = false)]
     pub keep: bool,
 
-    /// Contact-sheet layout. Omit for an even grid. `1` is the fixed 19-cell band.
+    /// Contact-sheet layout. Omit for an even grid. `1` is the fixed 14-cell band.
     #[arg(long)]
     pub layout: Option<u32>,
 }
@@ -102,7 +102,7 @@ impl Vcs {
         let layout_small_w = self.prepare_layout(layout, &spinner)?;
         let ex_scale = if let Some(small_w) = layout_small_w {
             let (large_w, large_h) = command::layout::large_size(small_w);
-            Some(format!("scale={large_w}:{large_h}:flags=bicubic"))
+            Some(format!("scale={large_w}:{large_h}:flags=bicubic,setsar=1"))
         } else {
             self.extract_scale()?
         };
@@ -169,6 +169,7 @@ impl Vcs {
                     video: None,
                     header: command::header::HeaderArgs::default(),
                     header_band: header_band.clone(),
+                    layout_small_w,
                 }
                 .run()
             })?;
@@ -274,7 +275,8 @@ impl Vcs {
         let mut path = temp_dir.to_path_buf();
         path.push(first.with_frame(1));
         let width = if let Some(small_w) = layout_small_w {
-            command::layout::COLUMNS * small_w
+            let bands = command::layout::bands_from_images(extract.out_templates.len() as u32)?;
+            command::layout::grid_px(bands, small_w).0
         } else {
             let (cap_w, _) = image::image_dimensions(&path)?;
             let (_, cols) = command::grid_shape(

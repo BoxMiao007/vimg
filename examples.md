@@ -40,7 +40,7 @@ vimg vcs -c7 -n35 -H288 -f1 bbb.mkv
 
 ## Example: Layout 1
 
-One fixed band of 19 cells. The top-left and bottom-right cells are twice as wide and tall as the others. `-n 2` stacks a second band underneath. `-c`, `-H` and `-W` are ignored.
+One fixed band of 14 cells: four columns and five row units. The top-left and bottom-right cells are twice as wide and tall as the others, with a full row of four small cells between them. An 8px black gap separates the cells, and the same gap sits on the left and right edges. `-n 2` stacks a second band underneath, with another row of four small cells between the two large cells. `-c`, `-H` and `-W` are ignored.
 
 ```sh
 vimg vcs --layout 1 -n 2 bbb.mkv

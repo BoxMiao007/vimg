@@ -18,7 +18,7 @@ use std::{
 pub struct Join {
     /// Number of capture columns in output.
     ///
-    /// Required unless `--layout 1`, which is always 5 columns.
+    /// Required unless `--layout 1`, which is always 4 columns.
     #[arg(long, short)]
     pub columns: Option<u32>,
 
@@ -41,7 +41,7 @@ pub struct Join {
     #[arg(long)]
     pub video: Option<PathBuf>,
 
-    /// Contact-sheet layout. Omit for an even grid. `1` is the fixed 19-cell band.
+    /// Contact-sheet layout. Omit for an even grid. `1` is the fixed 14-cell band.
     #[arg(long)]
     pub layout: Option<u32>,
 
@@ -55,6 +55,10 @@ pub struct Join {
     /// Already-rendered header. Set by `vcs` so each frame does not probe again.
     #[arg(skip)]
     pub header_band: Option<Arc<RgbaImage>>,
+
+    /// 版式 1 的小格宽。`vcs` 按源视频算好传入；抽帧已经缩成大格，不能再拿来重算。
+    #[arg(skip)]
+    pub layout_small_w: Option<u32>,
 }
 
 /// Rows, then the number of columns actually used.
@@ -131,9 +135,14 @@ impl Join {
         let mut labels = self.label.clone();
         labels.resize_with(images.len(), String::new);
 
-        let grid = compose_layout1(images, &labels)?;
+        let small_w = match self.layout_small_w {
+            Some(width) => width,
+            None => layout::small_width(images[0].width(), images[0].height())?,
+        };
+        let grid = compose_layout1(images, &labels, small_w)?;
+        let (_, expected_h) = layout::grid_px(bands, small_w);
         ensure!(
-            grid.height() == bands * layout::ROW_UNITS * layout::SMALL_HEIGHT,
+            grid.height() == expected_h,
             "内部错误: 版式 1 的高度和截数不一致"
         );
         let grid = self.with_header(grid)?;
@@ -208,11 +217,17 @@ fn layout1_warnings(
 fn compose_layout1(
     images: Vec<image::DynamicImage>,
     labels: &[String],
+    small_w: u32,
 ) -> anyhow::Result<RgbaImage> {
-    let (src_w, src_h) = (images[0].width(), images[0].height());
-    let small_w = layout::small_width(src_w, src_h)?;
+    let small_w = if small_w > 0 {
+        small_w
+    } else {
+        let (src_w, src_h) = (images[0].width(), images[0].height());
+        layout::small_width(src_w, src_h)?
+    };
     let (large_w, large_h) = layout::large_size(small_w);
-    let (grid_w, grid_h) = layout::grid_px(images.len() as u32 / layout::BAND_CELLS, small_w);
+    let bands = layout::bands_from_images(images.len() as u32)?;
+    let (grid_w, grid_h) = layout::grid_px(bands, small_w);
     let mut canvas = RgbaImage::new(grid_w, grid_h);
 
     for (index, img) in images.into_iter().enumerate() {
@@ -235,18 +250,18 @@ mod tests {
 
     #[test]
     fn layout1_paints_each_capture_in_reading_order() {
-        let images: Vec<_> = (0..19)
+        let images: Vec<_> = (0..14)
             .map(|n| {
                 let px = Rgba([n, 0, 255 - n, 255]);
                 image::DynamicImage::ImageRgba8(RgbaImage::from_pixel(100, 80, px))
             })
             .collect();
-        let grid = compose_layout1(images, &[]).unwrap();
+        let grid = compose_layout1(images, &[], 0).unwrap();
         // 100×80 的比例：216 * 100 / 80 = 270，已经是偶数。
         let small_w = 270;
-        assert_eq!(grid.dimensions(), (small_w * 5, 216 * 5));
+        assert_eq!(grid.dimensions(), layout::grid_px(1, small_w));
 
-        for index in 0..19u32 {
+        for index in 0..14u32 {
             let (x, y, side_w, side_h) = layout::place(index, small_w);
             let px = grid.get_pixel(x + side_w / 2, y + side_h / 2);
             assert_eq!(
@@ -257,5 +272,44 @@ mod tests {
             );
             assert_eq!(px.0[2], 255 - index as u8);
         }
+        // 中间行右边两格之间的竖缝不在任何大格里面，应仍是画布原色。
+        let (x, y, side_w, _) = layout::place(7, small_w);
+        assert_eq!(
+            grid.get_pixel(x + side_w + layout::GAP / 2, y + layout::SMALL_HEIGHT / 2)
+                .0,
+            [0, 0, 0, 0]
+        );
+        // 左右外缘是一条与格缝同宽的空白。
+        assert_eq!(grid.get_pixel(layout::GAP / 2, y).0, [0, 0, 0, 0]);
+        assert_eq!(
+            grid.get_pixel(grid.width() - layout::GAP / 2, y).0,
+            [0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn two_bands_keep_a_row_of_small_cells_between_the_large_ones() {
+        let images: Vec<_> = (0..32)
+            .map(|n| {
+                let px = Rgba([n as u8, 0, 0, 255]);
+                image::DynamicImage::ImageRgba8(RgbaImage::from_pixel(16, 9, px))
+            })
+            .collect();
+        let small_w = layout::small_width(16, 9).unwrap();
+        let grid = compose_layout1(images, &[], small_w).unwrap();
+        assert_eq!(grid.dimensions(), layout::grid_px(2, small_w));
+
+        // 第 15 到 18 张是隔开两截大格的那一行。
+        for index in 14..18u32 {
+            let (x, y, side_w, side_h) = layout::place(index, small_w);
+            assert_eq!((side_w, side_h), (small_w, layout::SMALL_HEIGHT));
+            assert_eq!(
+                grid.get_pixel(x + side_w / 2, y + side_h / 2).0[0],
+                index as u8
+            );
+        }
+        let (_, separator_y, _, _) = layout::place(14, small_w);
+        let (_, next_large_y, _, _) = layout::place(18, small_w);
+        assert!(next_large_y > separator_y + layout::SMALL_HEIGHT);
     }
 }
