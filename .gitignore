@@ -1,3 +1,6 @@
 /target
 /aur
 
+
+# 大文件样例视频不上库，按 AGENTS.md 用 ffmpeg 自行下载
+/test/bbb-test-video.mp4
