@@ -12,44 +12,65 @@ use std::{
     sync::Arc,
 };
 
-/// Join same-sized capture images into a single grid image.
+/// 把尺寸相同的截帧拼成一张网格图。
+///
+/// 不调用 ffmpeg，除非为了画参数栏而去探测 `--video`。等大网格必须给 `-c`，格子贴在一起。`-H`、`-W` 可选，给出就按比例缩放。
+///
+/// `--layout 1` 的张数必须正好是一截或连续的多截：14、32、50……对不上就不出图。输出格式看 `-o` 的扩展名，常见的有 png、jpg、bmp。
 #[derive(clap::Parser, Debug, Clone)]
 #[group(skip)]
+#[command(
+    override_usage = "vimg join [选项] -o <输出> <图片>...",
+    after_help = "示例:\n  \
+    vimg join -c 4 -H 216 -o sheet.png 帧1.bmp 帧2.bmp\n  \
+    vimg join --layout 1 -o sheet.png --video 视频.mkv 帧01.bmp ..."
+)]
 pub struct Join {
-    /// Number of capture columns in output.
+    /// 等大网格的列数。
     ///
-    /// Required unless `--layout 1`, which is always 4 columns.
-    #[arg(long, short)]
+    /// 必填，除非 `--layout 1`。版式 1 固定 4 列，写了也忽略，并在终端提示。
+    #[arg(long, short, value_name = "列数")]
     pub columns: Option<u32>,
 
-    /// Pixel width of each capture inside the grid. Will be scaled preserving aspect.
-    #[arg(long, short = 'W')]
+    /// 每一格的像素宽度。按画面比例缩放，不裁切。
+    ///
+    /// 与 `-H` 可以同时写，也可以都不写。都不写就用原图尺寸。`--layout 1` 时忽略并提示。
+    #[arg(long, short = 'W', value_name = "像素")]
     pub capture_width: Option<u32>,
 
-    /// Pixel height of each capture inside the grid. Will be scaled preserving aspect.
-    #[arg(long, short = 'H')]
+    /// 每一格的像素高度。按画面比例缩放，不裁切。
+    ///
+    /// 与 `-W` 可以同时写，也可以都不写。都不写就用原图尺寸。`--layout 1` 时忽略并提示：比例跟第一张图走，小格高度固定 216。
+    #[arg(long, short = 'H', value_name = "像素")]
     pub capture_height: Option<u32>,
 
-    /// Output file name.
-    #[arg(long, short)]
+    /// 输出图片路径。扩展名决定格式。
+    #[arg(long, short, value_name = "文件")]
     pub output: PathBuf,
 
-    #[arg(long)]
+    /// 印在格子右下角的文字。可重复，按顺序对应每一张图。
+    ///
+    /// 少给的格子留空。字号约为该格短边的 16%，最大 40 像素，没有底色。
+    #[arg(long, value_name = "文字")]
     pub label: Vec<String>,
 
-    /// Video file to read the header from. Without it, no header is drawn.
-    #[arg(long)]
+    /// 用来画参数栏的源视频。
+    ///
+    /// 不给就不画参数栏。`--info-all` 必须和它一起用，否则失败。没有真正的画面流时不出图；封面图不算视频轨。
+    #[arg(long, value_name = "视频")]
     pub video: Option<PathBuf>,
 
-    /// Contact-sheet layout. Omit for an even grid. `1` is the fixed 14-cell band.
-    #[arg(long)]
+    /// 接触表版式。不写是等大网格。
+    ///
+    /// `1` 是固定的一截 14 格。图片张数必须是 14，或之后每多一截加 18：32、50……对不上就不出图。不认识的编号会直接失败。
+    #[arg(long, value_name = "编号")]
     pub layout: Option<u32>,
 
     #[clap(flatten)]
     pub header: HeaderArgs,
 
-    /// Images to join.
-    #[arg(required = true)]
+    /// 要拼进去的图片，至少一张。等大网格要求尺寸相同。
+    #[arg(required = true, value_name = "图片")]
     pub capture_images: Vec<PathBuf>,
 
     /// Already-rendered header. Set by `vcs` so each frame does not probe again.

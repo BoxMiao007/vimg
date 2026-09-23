@@ -7,55 +7,77 @@ use anyhow::ensure;
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use std::{fs, path::PathBuf, process::Command, time::Duration};
 
-/// Create a new contact sheet for a video.
+/// 从视频生成接触表，编码成 AVIF。
 ///
-/// Extracts capture frames and joins into sheet(s) then encodes into
-/// an animated, or static, vcs avif.
+/// 抽帧、拼网格，再编码。不写 `--layout` 是等大网格：每一格一样大，贴在一起，没有外缘空白。这时必须给出 `-n`（格数）、`-c`（列数），以及 `-H` 或 `-W`（二者取一）。行数由格数和列数算出来，最后一行可以不满。
+///
+/// `--layout 1` 改用固定版式。一截 14 格，4 列、5 个行单位，左上和右下各一个 2×2 大格，正中间一行是 4 个小格。格与格之间留 8 像素黑缝，大格盖住内部那条缝；左右外缘各留 8 像素，上下外缘不留。这时 `-n` 是截数，默认 1。从第二截起，两截之间多一行 4 个小格，把上下两个大格隔开，所以 1 截 14 张，2 截 32 张，3 截 50 张。`-c`、`-H`、`-W` 被忽略并提示。小格高度固定 216，宽度按画面比例换算。
+///
+/// `-f` 默认 30，`-t` 默认 1500ms，`--avif-fps` 默认 20，所以默认大约是 1.5 秒的实时动画。`-f 1` 是静图。输出扩展名必须是 `.avif`。不写 `-o` 时用输入文件名换扩展名。网格上方默认画参数栏。每一格右下角印采样时刻。
 #[derive(clap::Parser, Debug, Clone)]
 #[group(skip)]
+#[command(
+    override_usage = "vimg vcs [选项] <视频>",
+    after_help = "示例:\n  \
+    vimg vcs -c 5 -n 25 -H 288 视频.mkv\n  \
+    vimg vcs -c 7 -n 35 -H 288 -f 1 视频.mkv\n  \
+    vimg vcs --layout 1 -n 2 视频.mkv"
+)]
 pub struct Vcs {
-    /// Number of capture columns in output.
+    /// 等大网格的列数。
     ///
-    /// Required unless `--layout 1`, which is always 4 columns.
-    #[arg(long, short)]
+    /// 必填，除非 `--layout 1`。版式 1 固定 4 列，写了也忽略，并在终端提示。格数不能整除列数时，最后一行不满。
+    #[arg(long, short, value_name = "列数")]
     pub columns: Option<u32>,
 
-    /// Output file name. Defaults to input with .avif extension.
-    #[arg(long, short)]
+    /// 输出文件。扩展名必须是 `.avif`。
+    ///
+    /// 不写时用输入文件名换扩展名，写到当前目录。指定了 `--output-dir` 时写到那个目录。编码先写到临时目录，成功后再挪过来。
+    #[arg(long, short, value_name = "文件")]
     pub output: Option<PathBuf>,
 
-    /// Crf quality level for encoding the output avif.
-    #[arg(long, default_value_t = 30)]
+    /// 编码质量，传给 ffmpeg 的 `-crf`。越小越清晰，文件越大。
+    #[arg(long, value_name = "质量", default_value_t = 30)]
     pub avif_crf: u8,
 
-    /// Ffmpeg vcodec to use for encoding the output avif.
-    #[arg(long, default_value = "libsvtav1")]
+    /// ffmpeg 用来编码 AVIF 的视频编码器。
+    ///
+    /// 默认 `libsvtav1`。要接近旧版行为可改成 `libaom-av1`。只有 `libaom-av1` 使用 `--avif-preset` 作为 `-cpu-used`，其余编码器作为 `-preset`。像素格式固定为 yuv420p10le。
+    #[arg(long, value_name = "编码器", default_value = "libsvtav1")]
     pub avif_codec: String,
 
-    /// Preset (or "cpu-used" for libaom-av1) for encoding the output avif.
+    /// 编码速度预设。数字越小通常越慢、压缩越好。
     ///
-    /// Default 1 for single-frame, 6 for multi-frame.
-    #[arg(long)]
+    /// 不写时，单帧（`-f 1`）用 1，多帧用 6。编码器是 `libaom-av1` 时传给 `-cpu-used`，其余编码器传给 `-preset`。
+    #[arg(long, value_name = "预设")]
     pub avif_preset: Option<u8>,
 
-    /// Output avif framerate for multi-frame outputs.
+    /// 多帧 AVIF 的播放帧率。
     ///
-    /// Example: The default 20fps will result in real time playback for
-    /// the default args: -f30 -t1500ms (30 frames over a 1.5s duration).
-    /// So using 10fps will result in half-time playback for: -f30 -t1500ms.
-    #[arg(long, default_value_t = 20.0)]
+    /// 默认 20。配合默认的 `-f 30 -t 1500ms`（1.5 秒里 30 帧）接近实时。改成 10 就是同样素材的半速。静图不受这个值影响。
+    #[arg(long, value_name = "帧率", default_value_t = 20.0)]
     pub avif_fps: f32,
 
-    /// Pixel width of each capture inside the grid. Will be scaled preserving aspect.
+    /// 等大网格里每一格的像素宽度。按画面比例缩放，不裁切。
     ///
-    /// Use this or -H (not both).
-    #[arg(long, short = 'W', conflicts_with = "capture_height")]
+    /// 与 `-H` 取一，不能同时写。`--layout 1` 时忽略并提示：小格高度固定 216，宽度按比例换算。
+    #[arg(
+        long,
+        short = 'W',
+        value_name = "像素",
+        conflicts_with = "capture_height"
+    )]
     pub capture_width: Option<u32>,
 
-    /// Pixel height of each capture inside the grid. Will be scaled preserving aspect.
+    /// 等大网格里每一格的像素高度。按画面比例缩放，不裁切。
     ///
-    /// Use this or -W (not both). Required unless `--layout 1`.
-    #[arg(long, short = 'H', conflicts_with = "capture_width")]
+    /// 与 `-W` 取一，不能同时写。等大网格必须写其中一个。`--layout 1` 时忽略并提示。
+    #[arg(
+        long,
+        short = 'H',
+        value_name = "像素",
+        conflicts_with = "capture_width"
+    )]
     pub capture_height: Option<u32>,
 
     #[clap(flatten)]
@@ -64,12 +86,16 @@ pub struct Vcs {
     #[clap(flatten)]
     pub header: header::HeaderArgs,
 
-    /// Keep temporary files.
+    /// 退出时保留临时目录。
+    ///
+    /// 默认在当前目录（或 `--output-dir`）下建 `.vimg-` 加 12 位随机字符的目录，存放抽出的 BMP 和编码前的成片。正常退出和 Ctrl-C 都会删掉。加上这个开关则留下，并在开始时打印路径。
     #[arg(long, default_value_t = false)]
     pub keep: bool,
 
-    /// Contact-sheet layout. Omit for an even grid. `1` is the fixed 14-cell band.
-    #[arg(long)]
+    /// 接触表版式。不写是等大网格。
+    ///
+    /// `1` 是固定的一截 14 格：4 列、5 个行单位，左上和右下各一个 2×2 大格，正中间一行 4 个小格。格缝 8 像素，左右外缘同样宽，上下外缘不留。这时 `-n` 改成截数，默认 1；多截之间另有一行 4 个小格隔开大格。不认识的编号会直接失败。目前只有 1。
+    #[arg(long, value_name = "编号")]
     pub layout: Option<u32>,
 }
 

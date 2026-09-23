@@ -10,49 +10,68 @@ use std::{
     process::Command,
 };
 
-/// Generate capture bmp images from a video using ffmpeg.
+/// 用 ffmpeg 从视频抽出 BMP 截帧，不拼图、不编码。
+///
+/// `-n` 必填，`-f` 默认 1。在忽略首尾之后的区间里等距取点，点落在每一段的中点。
+///
+/// 文件写到当前目录或 `--output-dir`，文件名形如 `视频名-12s-01.bmp`。偶尔抽不够帧时，用前一帧补上，并在终端警告。
 #[derive(clap::Parser, Debug, Clone)]
 #[group(skip)]
+#[command(
+    override_usage = "vimg extract [选项] <视频>",
+    after_help = "示例:\n  vimg extract -n 12 视频.mkv\n  vimg extract -n 8 -f 30 -t 1500ms 视频.mkv"
+)]
 pub struct Extract {
-    /// Number of equidistant points in the video to capture.
+    /// 等距采样的点数。
     ///
-    /// Required for `extract` and for the default `vcs` layout. With
-    /// `vcs --layout 1` this is the number of 14-cell bands, and defaults to 1.
-    #[arg(long, short)]
+    /// `extract` 和等大网格的 `vcs` 必填，表示要抽几格。`vcs --layout 1` 时改成截数：一截 14 张，之后每多一截加 18 张。不写默认 1 截。
+    #[arg(long, short, value_name = "数量")]
     pub number: Option<u32>,
 
-    /// Time or percentage at the start to ignore when calculating capture points.
-    #[arg(long = "ignore-start", default_value = "0s")]
+    /// 计算采样点时忽略开头的一段。
+    ///
+    /// 可写时长，如 `30s`、`1500ms`、`1m30s`；也可写百分比，如 `5%`，相对整段时长。
+    #[arg(long = "ignore-start", value_name = "时间", default_value = "0s")]
     pub ignore_start: DurationOrPercent,
 
-    /// Time or percentage at the end to ignore when calculating capture points.
-    #[arg(long = "ignore-end", default_value = "0s")]
+    /// 计算采样点时忽略结尾的一段。
+    ///
+    /// 写法与 `--ignore-start` 相同。去掉首尾之后剩下的时长必须大于 0。
+    #[arg(long = "ignore-end", value_name = "时间", default_value = "0s")]
     pub ignore_end: DurationOrPercent,
 
-    /// Number of frames to output for each capture (greater than 1 for animated captures).
+    /// 每一格输出几帧。大于 1 就是一小段动画。
     ///
-    /// Defaults to 1 (extract), 30 (vcs).
-    #[arg(long, short = 'f')]
+    /// `extract` 不写时是 1，只出静帧。`vcs` 不写时是 30。偶尔抽不够时，等大网格用前一帧补上；版式 1 不补，不出这张接触表。
+    #[arg(long, short = 'f', value_name = "帧数")]
     pub capture_frames: Option<u32>,
 
-    /// Duration per capture for multi-frame captures.
-    #[arg(long, short = 't', default_value = "1500ms")]
+    /// 多帧时，每一格从视频里取多长的素材。
+    ///
+    /// 可写 `1500ms`、`1.5s`。窗口不会超出片尾。单帧时这个时长仍然要大于 0。
+    #[arg(long, short = 't', value_name = "时长", default_value = "1500ms")]
     pub capture_time: HumanDuration,
 
-    /// Ffmpeg vfilter.
-    #[arg(long)]
+    /// 追加的 ffmpeg 视频滤镜，接在缩放后面。
+    ///
+    /// 原样传给 ffmpeg 的 `-vf`。`vcs` 会先放自己的缩放，再接这里的滤镜。
+    #[arg(long, value_name = "滤镜")]
     pub vfilter: Option<String>,
 
-    /// Number of threads / concurrent ffmpeg calls. 0=auto.
-    #[arg(long, short = 'T', default_value_t = 3)]
+    /// 同时跑几路 ffmpeg。
+    ///
+    /// 默认 3。写 0 则交给 rayon 按逻辑 CPU 数自动决定。
+    #[arg(long, short = 'T', value_name = "数量", default_value_t = 3)]
     pub threads: usize,
 
-    /// Directory to write capture images into. Defaults to the current directory.
-    #[arg(long)]
+    /// 截帧写到哪个目录。
+    ///
+    /// `extract` 不写时是当前目录。`vcs` 会改写到自己的临时目录；这时这个选项变成临时目录的父目录。目录不存在会创建。
+    #[arg(long, value_name = "目录")]
     pub output_dir: Option<PathBuf>,
 
-    /// Video file input.
-    #[arg(required = true)]
+    /// 要抽帧的视频文件。
+    #[arg(required = true, value_name = "视频")]
     pub video: PathBuf,
 
     /// 版式 1 不补缺帧。抽到的张数不够就停。

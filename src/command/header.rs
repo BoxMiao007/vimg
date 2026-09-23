@@ -21,23 +21,31 @@ pub enum InfoMode {
     Full,
 }
 
-/// Switches shared by `vcs` and `join`.
+/// `vcs` 和 `join` 共用的参数栏开关。
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct HeaderArgs {
-    /// Print the short source-video header. This is the default.
+    /// 画简要参数栏。这是 `vcs` 的默认行为，写不写一样。
+    ///
+    /// 五行，缺的字段不写：文件名；大小；分辨率、宽高比、帧率；第一条视频解码器，有音轨时同一行再写第一条音频解码器的名字；时长。与 `--info-all`、`--no-info` 互斥。
     #[arg(long, conflicts_with_all = ["info_all", "no_info"])]
     pub info: bool,
 
-    /// Print the long source-video header.
+    /// 画完整参数栏。
+    ///
+    /// 在简要参数的基础上，把解码器拆开，列出每一条音轨（码率、声道、采样率），再追加总码率、视频码率、像素格式、总帧数、容器。某个文件没有的字段不写。`join` 必须同时给出 `--video`。与 `--info`、`--no-info` 互斥。
     #[arg(long, conflicts_with_all = ["info", "no_info"])]
     pub info_all: bool,
 
-    /// Do not print a source-video header.
+    /// 不画参数栏，只留网格。
+    ///
+    /// 每一格右下角的采样时刻不受影响。与 `--info`、`--info-all` 互斥。
     #[arg(long, conflicts_with_all = ["info", "info_all"])]
     pub no_info: bool,
 
-    /// Font file for the header. Overrides the VIMG_FONT environment variable.
-    #[arg(long)]
+    /// 参数栏字体文件。优先于环境变量 VIMG_FONT。
+    ///
+    /// 查找顺序：这个文件、VIMG_FONT、MiSans、系统中文字体。Linux 上接着找 Noto Sans CJK、Noto Sans SC、思源黑体、文泉驿；Windows 上接着找微软雅黑、黑体、宋体。都没有就改用英文标签，并在终端警告。指定的文件打不开则失败。
+    #[arg(long, value_name = "文件")]
     pub font: Option<PathBuf>,
 }
 
