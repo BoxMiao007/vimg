@@ -76,37 +76,81 @@ pub fn grid_px(bands: u32, small_w: u32) -> (u32, u32) {
     (width, height)
 }
 
-/// 一截里 14 个格子的位置。从左到右、从上到下，扫到大格左上角就占用它。
+/// 一截里 14 个格子的位置。大格仍是 2×2。
+/// 左上从左到右、再换行；右下大格左边先从左到右，再换到下一行，大格最后放。
 pub fn slots() -> [Slot; BAND_CELLS as usize] {
-    let large_origins = [(0, 0), (2, 3)];
-    let mut occupied = [[false; COLUMNS as usize]; ROW_UNITS as usize];
-    let mut out = [Slot {
-        col: 0,
-        row: 0,
-        span: 1,
-    }; BAND_CELLS as usize];
-    let mut n = 0;
-    for row in 0..ROW_UNITS {
-        for col in 0..COLUMNS {
-            if occupied[row as usize][col as usize] {
-                continue;
-            }
-            let span = if large_origins.contains(&(col, row)) {
-                2
-            } else {
-                1
-            };
-            for dy in 0..span {
-                for dx in 0..span {
-                    occupied[(row + dy) as usize][(col + dx) as usize] = true;
-                }
-            }
-            out[n] = Slot { col, row, span };
-            n += 1;
-        }
-    }
-    debug_assert_eq!(n, BAND_CELLS as usize);
-    out
+    [
+        Slot {
+            col: 0,
+            row: 0,
+            span: 2,
+        },
+        Slot {
+            col: 2,
+            row: 0,
+            span: 1,
+        },
+        Slot {
+            col: 3,
+            row: 0,
+            span: 1,
+        },
+        Slot {
+            col: 2,
+            row: 1,
+            span: 1,
+        },
+        Slot {
+            col: 3,
+            row: 1,
+            span: 1,
+        },
+        Slot {
+            col: 0,
+            row: 2,
+            span: 1,
+        },
+        Slot {
+            col: 1,
+            row: 2,
+            span: 1,
+        },
+        Slot {
+            col: 2,
+            row: 2,
+            span: 1,
+        },
+        Slot {
+            col: 3,
+            row: 2,
+            span: 1,
+        },
+        Slot {
+            col: 0,
+            row: 3,
+            span: 1,
+        },
+        Slot {
+            col: 1,
+            row: 3,
+            span: 1,
+        },
+        Slot {
+            col: 0,
+            row: 4,
+            span: 1,
+        },
+        Slot {
+            col: 1,
+            row: 4,
+            span: 1,
+        },
+        Slot {
+            col: 2,
+            row: 3,
+            span: 2,
+        },
+    ]
 }
 
 /// 第 `index` 张（从 0 计）落在哪，跨截也算。
@@ -215,15 +259,15 @@ mod tests {
         assert_eq!(
             slots[11],
             Slot {
-                col: 2,
-                row: 3,
-                span: 2
+                col: 0,
+                row: 4,
+                span: 1
             }
         );
         assert_eq!(
             slots[12],
             Slot {
-                col: 0,
+                col: 1,
                 row: 4,
                 span: 1
             }
@@ -231,9 +275,9 @@ mod tests {
         assert_eq!(
             slots[13],
             Slot {
-                col: 1,
-                row: 4,
-                span: 1
+                col: 2,
+                row: 3,
+                span: 2
             }
         );
 
@@ -257,7 +301,7 @@ mod tests {
         assert_eq!(place(17, 384).0, GAP + 3 * (384 + GAP));
         // 第二截左上大格在这一行下面。
         assert_eq!(place(18, 384).1, 6 * step);
-        // 第二截的右下大格是这一截的第 12 张，整体下标 29。
-        assert_eq!(place(18 + 11, 384).1, 6 * step + 3 * step);
+        // 第二截的右下大格是这一截的最后一张，整体下标 31。
+        assert_eq!(place(18 + 13, 384).1, 6 * step + 3 * step);
     }
 }

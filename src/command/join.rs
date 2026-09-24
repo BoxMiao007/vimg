@@ -16,31 +16,31 @@ use std::{
 ///
 /// 不调用 ffmpeg，除非为了画参数栏而去探测 `--video`。等大网格必须给 `-c`，格子贴在一起。`-H`、`-W` 可选，给出就按比例缩放。
 ///
-/// `--layout 1` 的张数必须正好是一截或连续的多截：14、32、50……对不上就不出图。输出格式看 `-o` 的扩展名，常见的有 png、jpg、bmp。
+/// `-l 1`（`--layout 1`）的张数必须正好是一截或连续的多截：14、32、50……对不上就不出图。输出格式看 `-o` 的扩展名，常见的有 png、jpg、bmp。
 #[derive(clap::Parser, Debug, Clone)]
 #[group(skip)]
 #[command(
     override_usage = "vimg join [选项] -o <输出> <图片>...",
     after_help = "示例:\n  \
     vimg join -c 4 -H 216 -o sheet.png 帧1.bmp 帧2.bmp\n  \
-    vimg join --layout 1 -o sheet.png --video 视频.mkv 帧01.bmp ..."
+    vimg join -l 1 -o sheet.png --video 视频.mkv 帧01.bmp ..."
 )]
 pub struct Join {
     /// 等大网格的列数。
     ///
-    /// 必填，除非 `--layout 1`。版式 1 固定 4 列，写了也忽略，并在终端提示。
+    /// 必填，除非 `-l 1`。版式 1 固定 4 列，写了也忽略，并在终端提示。
     #[arg(long, short, value_name = "列数")]
     pub columns: Option<u32>,
 
     /// 每一格的像素宽度。按画面比例缩放，不裁切。
     ///
-    /// 与 `-H` 可以同时写，也可以都不写。都不写就用原图尺寸。`--layout 1` 时忽略并提示。
+    /// 与 `-H` 可以同时写，也可以都不写。都不写就用原图尺寸。`-l 1` 时忽略并提示。
     #[arg(long, short = 'W', value_name = "像素")]
     pub capture_width: Option<u32>,
 
     /// 每一格的像素高度。按画面比例缩放，不裁切。
     ///
-    /// 与 `-W` 可以同时写，也可以都不写。都不写就用原图尺寸。`--layout 1` 时忽略并提示：比例跟第一张图走，小格高度固定 216。
+    /// 与 `-W` 可以同时写，也可以都不写。都不写就用原图尺寸。`-l 1` 时忽略并提示：比例跟第一张图走，小格高度固定 216。
     #[arg(long, short = 'H', value_name = "像素")]
     pub capture_height: Option<u32>,
 
@@ -50,7 +50,7 @@ pub struct Join {
 
     /// 印在格子右下角的文字。可重复，按顺序对应每一张图。
     ///
-    /// 少给的格子留空。字号约为该格短边的 16%，最大 40 像素，没有底色。
+    /// 少给的格子留空。字号约为该格短边的 14%，最大 30 像素，没有底色。版式 1 大小格都是 30 像素。
     #[arg(long, value_name = "文字")]
     pub label: Vec<String>,
 
@@ -60,10 +60,10 @@ pub struct Join {
     #[arg(long, value_name = "视频")]
     pub video: Option<PathBuf>,
 
-    /// 接触表版式。不写是等大网格。
+    /// 接触表版式。不写是等大网格。`-l` 是 `--layout` 的简写。
     ///
     /// `1` 是固定的一截 14 格。图片张数必须是 14，或之后每多一截加 18：32、50……对不上就不出图。不认识的编号会直接失败。
-    #[arg(long, value_name = "编号")]
+    #[arg(long, short = 'l', value_name = "编号")]
     pub layout: Option<u32>,
 
     #[clap(flatten)]
@@ -194,9 +194,6 @@ impl Join {
             return Ok(grid);
         }
         let band = header::render(video, mode, self.header.font.as_deref(), grid.width())?;
-        if let Some(warning) = &band.warning {
-            eprintln!("{warning}");
-        }
         Ok(header::stack(&band.image, &grid))
     }
 

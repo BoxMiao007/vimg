@@ -24,7 +24,7 @@ use std::{
 pub struct Extract {
     /// 等距采样的点数。
     ///
-    /// `extract` 和等大网格的 `vcs` 必填，表示要抽几格。`vcs --layout 1` 时改成截数：一截 14 张，之后每多一截加 18 张。不写默认 1 截。
+    /// `extract` 和等大网格的 `vcs` 必填，表示要抽几格。`vcs -l 1` 时改成截数：一截 14 张，之后每多一截加 18 张。不写默认 1 截。
     #[arg(long, short, value_name = "数量")]
     pub number: Option<u32>,
 

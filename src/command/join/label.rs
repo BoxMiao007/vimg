@@ -9,7 +9,7 @@ pub(crate) const CANTARELL: &[u8] = include_bytes!("Cantarell-Regular.ttf");
 #[derive(Debug, Clone)]
 pub struct Config {
     pub scale_percent: f32,
-    /// 字号封顶。大格按比例算会过大，盖过画面。
+    /// 字号封顶。版式 1 小格按比例算出的字号与此相同，大小格一致。
     pub max_px: f32,
     pub margin_percent: f32,
     pub padding_percent: f32,
@@ -19,8 +19,8 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            scale_percent: 0.16,
-            max_px: 40.0,
+            scale_percent: 0.14,
+            max_px: 30.0,
             margin_percent: 0.03,
             padding_percent: 0.01,
             background_opacity: 0.0,
@@ -118,9 +118,9 @@ pub fn draw(
         }
     }
 
-    // 描边固定约 2 像素。按字号比例平移会把 0、4、8 的孔填死。
-    let shadow = (scale.y * 0.04).clamp(2.0, 4.0);
-    let stroke = 2.0;
+    // 描边固定 1.5 像素。按字号比例平移会把 0、4、8 的孔填死。
+    let shadow = (scale.y * 0.04).clamp(1.5, 3.0);
+    let stroke = 1.5;
     stamp(&mut rgba, &outline_glyphs, shadow, shadow, [0, 0, 0]);
     for dy in [-stroke, 0.0, stroke] {
         for dx in [-stroke, 0.0, stroke] {

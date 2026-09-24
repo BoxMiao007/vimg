@@ -1,4 +1,3 @@
-use crate::command::label::CANTARELL;
 use anyhow::{Context, bail};
 use ffprobe::{FfProbe, Stream};
 use glyph_brush_layout::ab_glyph::{Font, FontVec, PxScale, PxScaleFont, ScaleFont};
@@ -11,6 +10,9 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+/// 参数栏默认字体。找不到 `--font` 和 `VIMG_FONT` 时用它，不再改英文。
+pub(crate) const MISANS: &[u8] = include_bytes!("header/MiSans-Regular.ttf");
 
 /// How much of the source video to print above the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -26,13 +28,13 @@ pub enum InfoMode {
 pub struct HeaderArgs {
     /// 画简要参数栏。这是 `vcs` 的默认行为，写不写一样。
     ///
-    /// 五行，缺的字段不写：文件名；大小；分辨率、宽高比、帧率；第一条视频解码器，有音轨时同一行再写第一条音频解码器的名字；时长。与 `--info-all`、`--no-info` 互斥。
+    /// 九行，缺的整段不写：文件名；大小；时长；分辨率；视频码率与总码率；像素格式；第一条视频解码器；第一条音频解码器；流数量。与 `--info-all`、`--no-info` 互斥。
     #[arg(long, conflicts_with_all = ["info_all", "no_info"])]
     pub info: bool,
 
     /// 画完整参数栏。
     ///
-    /// 在简要参数的基础上，把解码器拆开，列出每一条音轨（码率、声道、采样率），再追加总码率、视频码率、像素格式、总帧数、容器。某个文件没有的字段不写。`join` 必须同时给出 `--video`。与 `--info`、`--no-info` 互斥。
+    /// 在简要参数后面追加其余视频轨、其余音轨、总帧数、容器。第一条已经写过的不重复。某个文件没有的字段不写。`join` 必须同时给出 `--video`。与 `--info`、`--no-info` 互斥。
     #[arg(long, conflicts_with_all = ["info", "no_info"])]
     pub info_all: bool,
 
@@ -44,7 +46,7 @@ pub struct HeaderArgs {
 
     /// 参数栏字体文件。优先于环境变量 VIMG_FONT。
     ///
-    /// 查找顺序：这个文件、VIMG_FONT、MiSans、系统中文字体。Linux 上接着找 Noto Sans CJK、Noto Sans SC、思源黑体、文泉驿；Windows 上接着找微软雅黑、黑体、宋体。都没有就改用英文标签，并在终端警告。指定的文件打不开则失败。
+    /// 查找顺序：这个文件、VIMG_FONT、程序内嵌的 MiSans。指定的文件打不开则失败。
     #[arg(long, value_name = "文件")]
     pub font: Option<PathBuf>,
 }
@@ -59,12 +61,6 @@ impl HeaderArgs {
             InfoMode::Brief
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Lang {
-    Zh,
-    En,
 }
 
 /// Facts taken from one file. Built without ffprobe in tests.
@@ -98,7 +94,6 @@ struct Picture {
 
 pub struct Band {
     pub image: Arc<RgbaImage>,
-    pub warning: Option<String>,
 }
 
 /// 第一条真正的视频轨的像素宽高。封面图不算。
@@ -124,14 +119,13 @@ pub fn render(
     if facts.videos.is_empty() {
         bail!("没有视频轨，无法生成接触表");
     }
-    let (font_data, face, lang, warning) = load_font(font)?;
+    let (font_data, face) = load_font(font)?;
     let face = FontVec::try_from_vec_and_index(font_data, face)
         .map_err(|_| anyhow::anyhow!("不是可用的字体文件"))?;
-    let lines = lines(&facts, mode, lang);
+    let lines = lines(&facts, mode);
     let image = draw_band(&face, &lines, grid_width)?;
     Ok(Band {
         image: Arc::new(image),
-        warning,
     })
 }
 
@@ -287,143 +281,161 @@ fn container_name(format_name: &str, extension: &str) -> Option<String> {
     }
 }
 
-fn lines(facts: &Facts, mode: InfoMode, lang: Lang) -> Vec<String> {
-    let zh = lang == Lang::Zh;
+fn lines(facts: &Facts, mode: InfoMode) -> Vec<String> {
     let mut out = Vec::new();
 
-    out.push(format!(
-        "{}: {}",
-        if zh { "文件名" } else { "File" },
-        facts.file_name
-    ));
+    out.push(format!("文件名：{}", facts.file_name));
 
     if let Some(bytes) = facts.size_bytes {
-        out.push(format!(
-            "{}: {}",
-            if zh { "大小" } else { "Size" },
-            format_size(bytes)
-        ));
-    }
-
-    if let Some(pic) = &facts.picture
-        && pic.width > 0
-        && pic.height > 0
-    {
-        let mut line = format!(
-            "{}: {}×{}({})",
-            if zh { "分辨率" } else { "Resolution" },
-            pic.width,
-            pic.height,
-            pic.aspect
-        );
-        if let Some(fps) = &pic.fps {
-            line.push_str(&format!(", fps: {fps}"));
-        }
-        out.push(line);
-    }
-
-    match mode {
-        InfoMode::Brief => {
-            if let Some(line) = brief_codec_line(facts, zh) {
-                out.push(line);
-            }
-        }
-        InfoMode::Full => {
-            for video in &facts.videos {
-                out.push(format!(
-                    "{}: {}",
-                    if zh { "视频解码器" } else { "Video" },
-                    video.codec
-                ));
-            }
-            for audio in &facts.audios {
-                out.push(audio_line(audio, zh));
-            }
-        }
-        InfoMode::Off => {}
+        out.push(format!("大小：{}", format_size(bytes)));
     }
 
     if let Some(secs) = facts.duration_s {
-        out.push(format!(
-            "{}: {}",
-            if zh { "时长" } else { "Duration" },
-            format_duration(secs)
-        ));
+        out.push(format!("时长：{}", format_duration(secs)));
+    }
+
+    if let Some(line) = resolution_line(facts.picture.as_ref()) {
+        out.push(line);
+    }
+
+    if let Some(line) = bitrate_line(facts) {
+        out.push(line);
+    }
+
+    if let Some(pix) = facts
+        .picture
+        .as_ref()
+        .and_then(|pic| pic.pix_fmt.as_deref())
+        && let Some(line) = pixel_line(pix)
+    {
+        out.push(line);
+    }
+
+    if let Some(video) = facts.videos.first() {
+        out.push(format!("视频解码器：{}", video.codec));
+    }
+    if let Some(audio) = facts.audios.first() {
+        out.push(audio_line(audio));
+    }
+
+    if let Some(line) = stream_count_line(facts.videos.len(), facts.audios.len()) {
+        out.push(line);
     }
 
     if mode == InfoMode::Full {
-        if let Some(rate) = facts.total_bitrate {
-            out.push(format!(
-                "{}: {}",
-                if zh { "总码率" } else { "Bitrate" },
-                format_bitrate(rate)
-            ));
-        }
-        for video in &facts.videos {
+        for video in facts.videos.iter().skip(1) {
+            out.push(format!("视频解码器：{}", video.codec));
             if let Some(rate) = video.bitrate {
-                out.push(format!(
-                    "{}: {}",
-                    if zh { "视频码率" } else { "Video bitrate" },
-                    format_bitrate(rate)
-                ));
+                out.push(format!("视频码率：{}", format_bitrate(rate)));
             }
         }
-        if let Some(pic) = &facts.picture {
-            if let Some(pix) = &pic.pix_fmt {
-                out.push(format!(
-                    "{}: {pix}",
-                    if zh { "像素格式" } else { "Pixel format" }
-                ));
-            }
-            if let Some(frames) = &pic.frames {
-                out.push(format!(
-                    "{}: {frames}",
-                    if zh { "总帧数" } else { "Frames" }
-                ));
-            }
+        for audio in facts.audios.iter().skip(1) {
+            out.push(audio_line(audio));
+        }
+        if let Some(frames) = facts.picture.as_ref().and_then(|pic| pic.frames.as_ref()) {
+            out.push(format!("总帧数：{frames}"));
         }
         if let Some(container) = &facts.container {
-            out.push(format!(
-                "{}: {container}",
-                if zh { "容器" } else { "Container" }
-            ));
+            out.push(format!("容器：{container}"));
         }
     }
 
     out
 }
 
-fn brief_codec_line(facts: &Facts, zh: bool) -> Option<String> {
-    let video = facts.videos.first()?;
-    let video_label = if zh { "视频解码器" } else { "Video" };
-    let mut line = format!("{video_label}: {}", video.codec);
-    if let Some(audio) = facts.audios.first() {
-        let audio_label = if zh { "音频解码器" } else { "Audio" };
-        line.push_str(&format!(", {audio_label}: {}", audio.codec));
+fn resolution_line(pic: Option<&Picture>) -> Option<String> {
+    let pic = pic.filter(|pic| pic.width > 0 && pic.height > 0)?;
+    let mut line = format!("分辨率：{}×{}", pic.width, pic.height);
+    if !pic.aspect.is_empty() {
+        line.push_str(&format!(" ({})", pic.aspect));
+    }
+    if let Some(fps) = &pic.fps {
+        line.push_str(&format!(" @ {fps}fps"));
     }
     Some(line)
 }
 
-fn audio_line(audio: &Track, zh: bool) -> String {
+fn bitrate_line(facts: &Facts) -> Option<String> {
+    let video = facts
+        .videos
+        .first()
+        .and_then(|video| video.bitrate)
+        .map(|rate| format!("视频码率：{}", format_bitrate(rate)));
+    let total = facts
+        .total_bitrate
+        .map(|rate| format!("总码率：{}", format_bitrate(rate)));
+    match (video, total) {
+        (Some(video), Some(total)) => Some(format!("{video} | {total}")),
+        (video, total) => video.or(total),
+    }
+}
+
+fn pixel_line(pix: &str) -> Option<String> {
+    let name = pix.trim();
+    if name.is_empty() || name == "N/A" {
+        return None;
+    }
+    match bit_depth(name) {
+        Some(bits) => Some(format!("像素格式：{name} ({bits}bit)")),
+        None => Some(format!("像素格式：{name}")),
+    }
+}
+
+/// 没有写明位数的常见格式按 8bit。单独一段的 9、10、12、14、16 照写。
+/// `p010le` 里的数字是 010，对不上，只写名字。
+fn bit_depth(pix: &str) -> Option<u8> {
+    const KNOWN: &[&str] = &[
+        "yuv420p", "yuv422p", "yuv444p", "yuv410p", "yuv411p", "yuv440p", "yuvj420p", "yuvj422p",
+        "yuvj444p", "gray", "rgb24", "bgr24",
+    ];
+    if KNOWN.contains(&pix) {
+        return Some(8);
+    }
+    let bytes = pix.as_bytes();
+    for bits in [16u8, 14, 12, 10, 9] {
+        let marker = bits.to_string();
+        let mut start = 0;
+        while let Some(rel) = pix[start..].find(&marker) {
+            let at = start + rel;
+            let before = at == 0 || !bytes[at - 1].is_ascii_digit();
+            let after = at + marker.len();
+            let after = after == bytes.len() || !bytes[after].is_ascii_digit();
+            if before && after {
+                return Some(bits);
+            }
+            start = at + 1;
+        }
+    }
+    None
+}
+
+fn audio_line(audio: &Track) -> String {
     let mut parts = vec![audio.codec.clone()];
     if let Some(rate) = audio.bitrate {
         parts.push(format_bitrate(rate));
     }
     if let Some(ch) = audio.channels {
-        parts.push(if zh {
-            format!("{ch} 声道")
-        } else {
-            format!("{ch} ch")
-        });
+        parts.push(format!("{ch} 声道"));
     }
     if let Some(rate) = &audio.sample_rate {
         parts.push(format!("{rate} Hz"));
     }
-    format!(
-        "{}: {}",
-        if zh { "音频解码器" } else { "Audio" },
-        parts.join(", ")
-    )
+    format!("音频解码器：{}", parts.join(" | "))
+}
+
+fn stream_count_line(videos: usize, audios: usize) -> Option<String> {
+    let total = videos + audios;
+    if total == 0 {
+        return None;
+    }
+    let mut kinds = Vec::new();
+    if videos > 0 {
+        kinds.push(format!("{videos} 视频"));
+    }
+    if audios > 0 {
+        kinds.push(format!("{audios} 音频"));
+    }
+    Some(format!("流数量：{total}（{}）", kinds.join(" + ")))
 }
 
 fn format_size(bytes: u64) -> String {
@@ -437,19 +449,7 @@ fn format_size(bytes: u64) -> String {
     } else {
         (bytes as f64 / KB, "KB")
     };
-    format!("{value:.1}{unit}({})", with_commas(bytes))
-}
-
-fn with_commas(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    format!("{out} bytes")
+    format!("{value:.1} {unit}")
 }
 
 fn format_duration(secs: f32) -> String {
@@ -483,38 +483,24 @@ fn format_tenths(bits: u64, unit: u64, name: &str) -> String {
     format!("{}.{} {name}", tenths / 10, tenths % 10)
 }
 
-const FONT_MISS: &str =
-    "警告: 未找到中文字体，参数栏改用英文。可用 --font 或环境变量 VIMG_FONT 指定字体文件。";
-
-fn load_font(explicit: Option<&Path>) -> anyhow::Result<(Vec<u8>, u32, Lang, Option<String>)> {
+fn load_font(explicit: Option<&Path>) -> anyhow::Result<(Vec<u8>, u32)> {
     if let Some(path) = explicit {
         return load_required(path, "--font");
     }
     if let Some(path) = env_font() {
         return load_required(&path, "VIMG_FONT");
     }
-    if let Some(found) = find_system_font() {
-        let data = fs::read(&found.path)?;
-        let face = preferred_face(&data).unwrap_or(0);
-        if FontVec::try_from_vec_and_index(data.clone(), face).is_err() {
-            return Ok((CANTARELL.to_vec(), 0, Lang::En, Some(FONT_MISS.into())));
-        }
-        return Ok((data, face, Lang::Zh, None));
-    }
-    Ok((CANTARELL.to_vec(), 0, Lang::En, Some(FONT_MISS.into())))
+    Ok((MISANS.to_vec(), 0))
 }
 
-fn load_required(
-    path: &Path,
-    source: &str,
-) -> anyhow::Result<(Vec<u8>, u32, Lang, Option<String>)> {
+fn load_required(path: &Path, source: &str) -> anyhow::Result<(Vec<u8>, u32)> {
     let data = fs::read(path)
         .with_context(|| format!("{source} 不是可用的字体文件: {}", path.display()))?;
     let face = preferred_face(&data).unwrap_or(0);
     if FontVec::try_from_vec_and_index(data.clone(), face).is_err() {
         bail!("{source} 不是可用的字体文件: {}", path.display());
     }
-    Ok((data, face, Lang::Zh, None))
+    Ok((data, face))
 }
 
 fn env_font() -> Option<PathBuf> {
@@ -525,94 +511,6 @@ fn env_font() -> Option<PathBuf> {
     } else {
         Some(path)
     }
-}
-
-struct FoundFont {
-    path: PathBuf,
-}
-
-fn find_system_font() -> Option<FoundFont> {
-    find_font_in(&font_roots())
-}
-
-fn font_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if cfg!(windows) {
-        if let Some(windir) = std::env::var_os("WINDIR") {
-            roots.push(PathBuf::from(windir).join("Fonts"));
-        }
-        roots.push(PathBuf::from(r"C:\Windows\Fonts"));
-    } else {
-        roots.push(PathBuf::from("/usr/share/fonts"));
-        if let Some(home) = std::env::var_os("HOME") {
-            roots.push(PathBuf::from(home).join(".local/share/fonts"));
-        }
-    }
-    roots
-}
-
-fn find_font_in(roots: &[PathBuf]) -> Option<FoundFont> {
-    let mut files = Vec::new();
-    for root in roots {
-        collect_fonts(root, &mut files);
-    }
-    files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-
-    if let Some(path) = files.iter().find(|p| name_has(p, &["misans"])).cloned() {
-        return Some(FoundFont { path });
-    }
-
-    let needles: &[&[&str]] = if cfg!(windows) {
-        &[&["msyh.ttc"], &["simhei.ttf"], &["simsun.ttc"]]
-    } else {
-        &[
-            &["notosanscjk", "noto sans cjk", "notosans-cjk"],
-            &["notosanssc", "noto sans sc", "notosans-sc"],
-            &["sourcehansans", "source han sans"],
-            &["wqy-microhei", "wenquanyi", "文泉驿"],
-        ]
-    };
-
-    for group in needles {
-        if let Some(path) = files.iter().find(|p| name_has(p, group)).cloned() {
-            return Some(FoundFont { path });
-        }
-    }
-    None
-}
-
-fn name_has(path: &Path, needles: &[&str]) -> bool {
-    let Some(name) = path.file_name() else {
-        return false;
-    };
-    let name = name.to_string_lossy().to_lowercase();
-    needles.iter().any(|n| name.contains(&n.to_lowercase()))
-}
-
-fn collect_fonts(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(ty) = entry.file_type() else { continue };
-        if ty.is_dir() {
-            collect_fonts(&path, out);
-        } else if is_font_file(&path) {
-            out.push(path);
-        }
-    }
-}
-
-fn is_font_file(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
-        Some("ttf" | "otf" | "ttc" | "otc")
-    )
 }
 
 /// Prefer a face whose family name says it is Simplified Chinese.
@@ -755,13 +653,11 @@ fn wrap_line(
 }
 
 /// Stack a header band on top of an already-built grid. Widths must match.
+/// 总高度补成偶数。YUV 4:2:0 的编码器拒绝奇数高度，多出来的一行是黑边。
 pub fn stack(band: &RgbaImage, grid: &RgbaImage) -> RgbaImage {
     let width = grid.width().max(band.width());
-    let mut out = RgbaImage::from_pixel(
-        width,
-        band.height() + grid.height(),
-        image::Rgba([0, 0, 0, 255]),
-    );
+    let height = (band.height() + grid.height() + 1) & !1;
+    let mut out = RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]));
     image::imageops::replace(&mut out, band, 0, 0);
     image::imageops::replace(&mut out, grid, 0, band.height() as i64);
     out
@@ -810,51 +706,44 @@ mod tests {
     }
 
     #[test]
-    fn brief_is_five_lines_and_truncates_duration() {
-        let lines = lines(&sample(), InfoMode::Brief, Lang::Zh);
+    fn brief_lists_the_default_fields_and_truncates_duration() {
+        let lines = lines(&sample(), InfoMode::Brief);
         assert_eq!(
             lines,
             vec![
-                "文件名: bbb-test-video.mp4",
-                "大小: 263.3MB(276,134,947 bytes)",
-                "分辨率: 1920×1080(16:9), fps: 30",
-                "视频解码器: H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10, 音频解码器: MP3 (MPEG audio layer 3)",
-                "时长: 00:10:34",
+                "文件名：bbb-test-video.mp4",
+                "大小：263.3 MB",
+                "时长：00:10:34",
+                "分辨率：1920×1080 (16:9) @ 30fps",
+                "视频码率：3.0 Mbps | 总码率：3.5 Mbps",
+                "像素格式：yuv420p (8bit)",
+                "视频解码器：H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+                "音频解码器：MP3 (MPEG audio layer 3) | 160 kbps | 2 声道 | 48000 Hz",
+                "流数量：3（1 视频 + 2 音频）",
             ]
         );
     }
 
     #[test]
-    fn full_lists_every_audio_and_the_closed_tail() {
-        let lines = lines(&sample(), InfoMode::Full, Lang::Zh);
+    fn full_appends_the_remaining_tracks_frames_and_container() {
+        let lines = lines(&sample(), InfoMode::Full);
         assert_eq!(
             lines,
             vec![
-                "文件名: bbb-test-video.mp4",
-                "大小: 263.3MB(276,134,947 bytes)",
-                "分辨率: 1920×1080(16:9), fps: 30",
-                "视频解码器: H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
-                "音频解码器: MP3 (MPEG audio layer 3), 160 kbps, 2 声道, 48000 Hz",
-                "音频解码器: ATSC A/52A (AC-3), 320 kbps, 6 声道, 48000 Hz",
-                "时长: 00:10:34",
-                "总码率: 3.5 Mbps",
-                "视频码率: 3.0 Mbps",
-                "像素格式: yuv420p",
-                "总帧数: 19036",
-                "容器: mp4",
+                "文件名：bbb-test-video.mp4",
+                "大小：263.3 MB",
+                "时长：00:10:34",
+                "分辨率：1920×1080 (16:9) @ 30fps",
+                "视频码率：3.0 Mbps | 总码率：3.5 Mbps",
+                "像素格式：yuv420p (8bit)",
+                "视频解码器：H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+                "音频解码器：MP3 (MPEG audio layer 3) | 160 kbps | 2 声道 | 48000 Hz",
+                "流数量：3（1 视频 + 2 音频）",
+                "音频解码器：ATSC A/52A (AC-3) | 320 kbps | 6 声道 | 48000 Hz",
+                "总帧数：19036",
+                "容器：mp4",
             ]
         );
-    }
-
-    #[test]
-    fn english_fallback_uses_the_agreed_labels() {
-        let lines = lines(&sample(), InfoMode::Brief, Lang::En);
-        assert_eq!(lines[0], "File: bbb-test-video.mp4");
-        assert_eq!(
-            lines[3],
-            "Video: H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10, Audio: MP3 (MPEG audio layer 3)"
-        );
-        assert_eq!(lines[4], "Duration: 00:10:34");
     }
 
     #[test]
@@ -881,25 +770,37 @@ mod tests {
             total_bitrate: None,
             container: None,
         };
-        let lines = lines(&facts, InfoMode::Full, Lang::Zh);
+        let lines = lines(&facts, InfoMode::Full);
         assert_eq!(
             lines,
             vec![
-                "文件名: clip.mkv",
-                "分辨率: 1920×800(12:5), fps: 23.98",
-                "视频解码器: H.264",
+                "文件名：clip.mkv",
+                "分辨率：1920×800 (12:5) @ 23.98fps",
+                "视频解码器：H.264",
+                "流数量：1（1 视频）",
             ]
         );
     }
 
     #[test]
     fn size_steps_through_kb_mb_gb() {
-        assert_eq!(format_size(512), "0.5KB(512 bytes)");
-        assert_eq!(format_size(276_134_947), "263.3MB(276,134,947 bytes)");
+        assert_eq!(format_size(512), "0.5 KB");
+        assert_eq!(format_size(276_134_947), "263.3 MB");
+        assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
+    }
+
+    #[test]
+    fn bit_depth_comes_from_the_pixel_format_name() {
         assert_eq!(
-            format_size(1024 * 1024 * 1024),
-            "1.0GB(1,073,741,824 bytes)"
+            pixel_line("yuv420p").as_deref(),
+            Some("像素格式：yuv420p (8bit)")
         );
+        assert_eq!(
+            pixel_line("yuv420p10le").as_deref(),
+            Some("像素格式：yuv420p10le (10bit)")
+        );
+        assert_eq!(pixel_line("p010le").as_deref(), Some("像素格式：p010le"));
+        assert_eq!(pixel_line("N/A"), None);
     }
 
     #[test]
@@ -944,26 +845,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_font_dir_finds_nothing() {
-        let dir = Path::new("/tmp/opencode/vimg-no-fonts");
-        let _ = fs::create_dir_all(dir);
-        assert!(find_font_in(&[dir.to_path_buf()]).is_none());
-    }
-
-    #[test]
-    fn misans_is_preferred_over_a_later_system_font() {
-        let dir = Path::new("/tmp/opencode/vimg-font-order");
-        let _ = fs::remove_dir_all(dir);
-        fs::create_dir_all(dir).unwrap();
-        fs::write(dir.join("NotoSansCJK-Regular.ttc"), []).unwrap();
-        fs::write(dir.join("MiSans-Regular.ttf"), []).unwrap();
-        let found = find_font_in(&[dir.to_path_buf()]).unwrap();
-        assert!(found.path.ends_with("MiSans-Regular.ttf"));
-    }
-
-    #[test]
     fn glyph_counters_stay_open() {
-        let font = FontVec::try_from_vec(CANTARELL.to_vec()).unwrap();
+        let font = FontVec::try_from_vec(MISANS.to_vec()).unwrap();
         let img = draw_band(&font, &["0".into()], 240).unwrap();
         let (mut min_x, mut min_y) = (img.width(), img.height());
         let (mut max_x, mut max_y) = (0u32, 0u32);
