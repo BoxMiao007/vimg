@@ -1,6 +1,6 @@
 [package]
 name = "vimg"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Alex Butler <alexheretic@gmail.com>"]
 edition = "2024"
 description = "从视频抽出截帧，排成接触表，再编码成 AVIF。"
